@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Single Image Puzzle</title>
+<style>
+  body { font-family: Arial, sans-serif; background: #f0f0f0; text-align: center; margin: 0; padding: 0; }
+  h1 { margin: 10px; }
+  #controls { margin: 15px; }
+  select, button { margin: 5px; padding: 8px 14px; font-size: 14px; border-radius: 8px; border: none; cursor: pointer; }
+  button { background: #3498db; color: #fff; }
+  button:hover { background: #2980b9; }
+  #puzzle { position: relative; margin: 20px auto; background: #fff; border: 2px solid #333; width: 522px; height: 743px; overflow: hidden; }
+  .piece { position: absolute; cursor: grab; transition: transform 0.2s; }
+  .piece.dragging { opacity: 0.6; }
+  #overlay, #completeOverlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: none; align-items: center; justify-content: center; background: rgba(255,255,255,0.9); z-index: 10; font-size: 36px; font-weight: bold; color: green; }
+  #timer { font-size: 18px; margin-top: 10px; }
+  .confetti { position: absolute; width: 8px; height: 8px; border-radius: 50%; opacity: 0.8; }
+</style>
+</head>
+<body>
+
+<h1> Single Image Puzzle</h1>
+
+<div id="controls">
+  <label>Choose Image:
+    <select id="imageSelect">
+      <option value="https://m.media-amazon.com/images/I/81WZvobLjBL._AC_SX522_.jpg">Image 1</option>
+      <option value="https://m.media-amazon.com/images/I/61EZNvCnUgL._AC_SX522_.jpg">Image 2</option>
+      <option value="https://m.media-amazon.com/images/I/61USJ-NQpAL._AC_SX522_.jpg">Image 3</option>
+    </select>
+  </label>
+
+  <label>Difficulty:
+    <select id="difficultySelect">
+      <option value="4">Easy (2x2)</option>
+      <option value="9">Medium (3x3)</option>
+      <option value="16">Hard (4x4)</option>
+      <option value="25">Extreme (5x5)</option>
+    </select>
+  </label>
+
+  <label>Shape:
+    <select id="shapeSelect">
+      <option value="square">Squares</option>
+      <option value="diagonal">Diagonals</option>
+    </select>
+  </label>
+
+  <button id="shuffleBtn">Shuffle</button>
+  <button id="originalBtn">See Original</button>
+  <button id="completeBtn">Complete</button>
+</div>
+
+<div id="timer">Time: 0:00</div>
+
+<div id="puzzle">
+  <div id="overlay"></div>
+  <div id="completeOverlay">🎉 WELL DONE! 🎉</div>
+</div>
+
+<audio id="clickSound" src="https://actions.google.com/sounds/v1/cartoon/wood_plank_flicks.ogg"></audio>
+<audio id="successSound" src="https://actions.google.com/sounds/v1/cartoon/clang_and_wobble.ogg"></audio>
+
+<script>
+const puzzle = document.getElementById('puzzle');
+const imageSelect = document.getElementById('imageSelect');
+const difficultySelect = document.getElementById('difficultySelect');
+const shapeSelect = document.getElementById('shapeSelect');
+const shuffleBtn = document.getElementById('shuffleBtn');
+const originalBtn = document.getElementById('originalBtn');
+const completeBtn = document.getElementById('completeBtn');
+const timerDisplay = document.getElementById('timer');
+const clickSound = document.getElementById('clickSound');
+const successSound = document.getElementById('successSound');
+
+let pieces = [];
+let currentDrag = null;
+let offsetX = 0, offsetY = 0;
+let timer = 0;
+let timerInterval;
+let overlay = document.getElementById('overlay'); 
+let completeOverlay = document.getElementById('completeOverlay');
+const SNAP_DISTANCE = 20; // Snap-to-place threshold
+let bestTime = null;
+
+// Build puzzle
+function buildPuzzle() {
+  clearInterval(timerInterval);
+  timer = 0; 
+  timerDisplay.textContent = "Time: 0:00";
+  
+  puzzle.innerHTML = '<div id="overlay"></div><div id="completeOverlay">🎉 WELL DONE! 🎉</div>';
+  overlay = document.getElementById('overlay');
+  completeOverlay = document.getElementById('completeOverlay');
+  
+  pieces = [];
+  
+  const imgUrl = imageSelect.value;
+  const pieceCount = parseInt(difficultySelect.value);
+  const rows = Math.sqrt(pieceCount);
+  const cols = rows;
+  const pw = puzzle.clientWidth;
+  const ph = puzzle.clientHeight;
+  const pieceW = pw / cols;
+  const pieceH = ph / rows;
+  const shapeMode = shapeSelect.value;
+
+  for(let r=0; r<rows; r++){
+    for(let c=0; c<cols; c++){
+      if(shapeMode === "diagonal"){
+        // Top-left triangle
+        const t1 = createTrianglePiece(imgUrl, pieceW, pieceH, c, r, pw, ph, "polygon(0 0, 100% 0, 0 100%)");
+        puzzle.appendChild(t1);
+        pieces.push(t1);
+        // Bottom-right triangle
+        const t2 = createTrianglePiece(imgUrl, pieceW, pieceH, c, r, pw, ph, "polygon(100% 0, 100% 100%, 0 100%)");
+        puzzle.appendChild(t2);
+        pieces.push(t2);
+      } else {
+        const div = createTrianglePiece(imgUrl, pieceW, pieceH, c, r, pw, ph, "polygon(0 0, 100% 0, 100% 100%, 0 100%)");
+        puzzle.appendChild(div);
+        pieces.push(div);
+      }
+    }
+  }
+  startTimer();
+}
+
+function createTrianglePiece(imgUrl, w, h, col, row, pw, ph, clip){
+  const div = document.createElement('div');
+  div.classList.add('piece');
+  div.style.width = w + 'px';
+  div.style.height = h + 'px';
+  div.style.backgroundImage = `url('${imgUrl}')`;
+  div.style.backgroundSize = `${pw}px ${ph}px`;
+  div.style.backgroundPosition = `-${col*w}px -${row*h}px`;
+  div.style.left = col*w + 'px';
+  div.style.top = row*h + 'px';
+  div.style.clipPath = clip;
+  div.dataset.correctLeft = div.style.left;
+  div.dataset.correctTop = div.style.top;
+  addDrag(div);
+  return div;
+}
+
+// Dragging
+function addDrag(el){
+  el.addEventListener('mousedown', startDrag);
+  el.addEventListener('touchstart', startDragTouch, {passive:false});
+}
+function startDrag(e){
+  currentDrag = e.target;
+  currentDrag.classList.add('dragging');
+  offsetX = e.offsetX; offsetY = e.offsetY;
+  document.addEventListener('mousemove', drag);
+  document.addEventListener('mouseup', stopDrag);
+}
+function drag(e){
+  if(!currentDrag) return;
+  currentDrag.style.left = (e.pageX - puzzle.offsetLeft - offsetX) + 'px';
+  currentDrag.style.top = (e.pageY - puzzle.offsetTop - offsetY) + 'px';
+}
+function stopDrag(){
+  if(currentDrag) {
+    snapPiece(currentDrag);
+    currentDrag.classList.remove('dragging');
+    clickSound.play();
+    checkCompletion();
+  }
+  document.removeEventListener('mousemove', drag);
+  document.removeEventListener('mouseup', stopDrag);
+  currentDrag = null;
+}
+
+// Touch drag
+function startDragTouch(e){
+  e.preventDefault();
+  currentDrag = e.target;
+  currentDrag.classList.add('dragging');
+  const touch = e.touches[0];
+  const rect = puzzle.getBoundingClientRect();
+  offsetX = touch.clientX - rect.left - parseFloat(currentDrag.style.left);
+  offsetY = touch.clientY - rect.top - parseFloat(currentDrag.style.top);
+  document.addEventListener('touchmove', dragTouch, {passive:false});
+  document.addEventListener('touchend', stopDragTouch);
+}
+function dragTouch(e){
+  e.preventDefault();
+  if(!currentDrag) return;
+  const touch = e.touches[0];
+  const rect = puzzle.getBoundingClientRect();
+  currentDrag.style.left = (touch.clientX - rect.left - offsetX) + 'px';
+  currentDrag.style.top = (touch.clientY - rect.top - offsetY) + 'px';
+}
+function stopDragTouch(){
+  if(currentDrag) {
+    snapPiece(currentDrag);
+    currentDrag.classList.remove('dragging');
+    clickSound.play();
+    checkCompletion();
+  }
+  document.removeEventListener('touchmove', dragTouch);
+  document.removeEventListener('touchend', stopDragTouch);
+  currentDrag = null;
+}
+
+// Snap-to-place
+function snapPiece(piece){
+  const targetX = parseFloat(piece.dataset.correctLeft);
+  const targetY = parseFloat(piece.dataset.correctTop);
+  const dx = piece.offsetLeft - targetX;
+  const dy = piece.offsetTop - targetY;
+  if(Math.hypot(dx, dy) < SNAP_DISTANCE){
+    piece.style.left = targetX + 'px';
+    piece.style.top = targetY + 'px';
+  }
+}
+
+// Check completion
+function checkCompletion(){
+  const allCorrect = pieces.every(p => p.style.left === p.dataset.correctLeft && p.style.top === p.dataset.correctTop);
+  if(allCorrect){
+    clearInterval(timerInterval);
+    successSound.play();
+    completeOverlay.style.display = 'flex';
+    spawnConfetti(120);
+    setTimeout(()=> completeOverlay.style.display = 'none', 3000);
+    // Save best time
+    if(bestTime === null || timer < bestTime) bestTime = timer;
+    console.log("Completed! Time: "+formatTime(timer)+" Best: "+formatTime(bestTime));
+  }
+}
+
+// Timer
+function startTimer(){
+  clearInterval(timerInterval);
+  timerInterval = setInterval(()=>{
+    timer++;
+    timerDisplay.textContent = "Time: " + formatTime(timer);
+  },1000);
+}
+
+function formatTime(seconds){
+  const m = Math.floor(seconds/60);
+  const s = seconds%60;
+  return `${m}:${s.toString().padStart(2,'0')}`;
+}
+
+// Shuffle
+function shufflePieces(){
+  pieces.forEach(piece=>{
+    piece.style.left = Math.random()*(puzzle.clientWidth-piece.clientWidth) + 'px';
+    piece.style.top = Math.random()*(puzzle.clientHeight-piece.clientHeight) + 'px';
+  });
+  timer = 0;
+  timerDisplay.textContent = "Time: 0:00";
+  startTimer();
+}
+
+// Original
+originalBtn.addEventListener('click', ()=>{
+  overlay.style.backgroundImage = `url('${imageSelect.value}')`;
+  overlay.style.display = 'flex';
+  setTimeout(()=> overlay.style.display = 'none', 4000);
+});
+
+// Complete button
+completeBtn.addEventListener('click', ()=>{
+  clearInterval(timerInterval);
+  pieces.forEach(p => {
+    p.style.left = p.dataset.correctLeft;
+    p.style.top = p.dataset.correctTop;
+  });
+  successSound.play();
+  completeOverlay.style.display = 'flex';
+  spawnConfetti(120);
+  setTimeout(()=> completeOverlay.style.display = 'none', 3000);
+});
+
+// Confetti
+function spawnConfetti(count){
+  for(let i=0;i<count;i++){
+    const c = document.createElement('div');
+    c.classList.add('confetti');
+    c.style.left = puzzle.clientWidth/2 + 'px';
+    c.style.top = puzzle.clientHeight/2 + 'px';
+    c.style.background = `hsl(${Math.random()*360},100%,50%)`;
+    puzzle.appendChild(c);
+    let angle = Math.random()*2*Math.PI;
+    let speed = Math.random()*5+2;
+    let vx = Math.cos(angle)*speed;
+    let vy = Math.sin(angle)*speed;
+    function fall(){
+      let left = parseFloat(c.style.left);
+      let top = parseFloat(c.style.top);
+      if(top>puzzle.clientHeight || left<0 || left>puzzle.clientWidth){
+        c.remove();
+        return;
+      }
+      c.style.left = left + vx + 'px';
+      c.style.top = top + vy + 'px';
+      vy += 0.1;
+      requestAnimationFrame(fall);
+    }
+    fall();
+  }
+}
+
+// Init
+buildPuzzle();
+imageSelect.addEventListener('change', buildPuzzle);
+difficultySelect.addEventListener('change', buildPuzzle);
+shapeSelect.addEventListener('change', buildPuzzle);
+shuffleBtn.addEventListener('click', shufflePieces);
+</script>
+
+</body>
+</html>
