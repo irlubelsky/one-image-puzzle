@@ -1,1 +1,0 @@
-# one-image-puzzle
